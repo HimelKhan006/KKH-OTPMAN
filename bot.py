@@ -790,7 +790,8 @@ async def _deliver_item(bot: Bot, item: Dict[str, Any], dest_ids: Set[int]) -> b
 async def poll_incoming_messages(application: Application):
     global total_forwarded_count
     init_db()
-    logger.info("🚀 OTPMAN 2 (KSI) polling engine started (crash-proof, dual-group delivery).")
+    bot_start_time = datetime.now(timezone.utc).timestamp()
+    logger.info(f"🚀 OTPMAN 2 (KSI) polling engine started at epoch {bot_start_time:.0f}.")
 
     try:
         with get_db_connection() as conn:
@@ -830,9 +831,15 @@ async def poll_incoming_messages(application: Application):
                 new_items = []
                 for m in messages:
                     k = generate_message_key(m)
-                    if k and not is_message_seen(k):
-                        new_items.append(m)
-                        seen_message_ids.add(k)  # Mark seen immediately
+                    if not k or is_message_seen(k):
+                        continue
+                    # Timestamp check: ignore any SMS older than bot startup time
+                    msg_ts = parse_message_timestamp(str(m.get("received_at") or m.get("createdAt") or m.get("messageTime") or ""))
+                    if msg_ts > 0 and msg_ts < (bot_start_time - 15.0):
+                        seen_message_ids.add(k)
+                        continue
+                    new_items.append(m)
+                    seen_message_ids.add(k)  # Mark seen immediately
 
                 if new_items:
                     logger.info(f"🔔 {len(new_items)} new SMS/OTP(s) detected from OTPMAN 2 (KSI)!")
