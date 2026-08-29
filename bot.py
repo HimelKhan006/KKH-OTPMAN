@@ -800,46 +800,39 @@ async def poll_incoming_messages(application: Application):
     except Exception as e:
         logger.warning(f"Preload error: {e}")
 
-    # Startup pass: baseline history, forward anything from last 30s
-    recent_cutoff = datetime.now(timezone.utc).timestamp() - 30.0
+    # Startup pass: baseline history, mark ALL existing messages as seen (NEVER forward old history)
     try:
-        dest_ids     = _get_otp_dest_ids()
         initial_msgs = await client.fetch_incoming_messages()
         baselined    = 0
-        forwarded    = 0
-        for item in reversed(initial_msgs):
+        for item in initial_msgs:
             mid = generate_message_key(item)
-            if not mid or is_message_seen(mid):
+            if not mid:
                 continue
-            msg_ts = parse_message_timestamp(str(item.get("received_at") or item.get("createdAt") or ""))
-            if dest_ids and msg_ts >= recent_cutoff:
-                ok = await _deliver_item(application.bot, item, dest_ids)
-                if ok:
-                    total_forwarded_count += 1
-                    forwarded += 1
-                await asyncio.sleep(0.3)
-            else:
-                raw_num = str(item.get("number") or item.get("destinationNumber") or "")
-                num     = mask_phone_number(raw_num)
-                raw_msg = str(item.get("message") or item.get("text") or item.get("body") or "")
-                otp     = extract_otp_code(raw_msg)
-                gid     = get_linked_group_chat_id()
-                iso     = get_country_iso_display(item)
-                save_processed_message(item, gid or 0, iso, num, otp)
-                baselined += 1
-        logger.info(f"✅ Startup: {forwarded} recent OTPs forwarded, {baselined} historical messages baselined.")
+            seen_message_ids.add(mid)
+            raw_num = str(item.get("number") or item.get("destinationNumber") or "")
+            num     = mask_phone_number(raw_num)
+            raw_msg = str(item.get("message") or item.get("text") or item.get("body") or "")
+            otp     = extract_otp_code(raw_msg)
+            gid     = get_linked_group_chat_id()
+            iso     = get_country_iso_display(item)
+            save_processed_message(item, gid or 0, iso, num, otp)
+            baselined += 1
+        logger.info(f"✅ Startup: {baselined} historical messages baselined (0 old messages forwarded).")
     except Exception as e:
         logger.warning(f"Startup pass error: {e}")
 
-    # Live Polling Loop
+    # Live Polling Loop - ONLY forwards new messages that arrive AFTER startup
     while True:
         try:
             dest_ids = _get_otp_dest_ids()
             if dest_ids:
                 messages = await client.fetch_incoming_messages()
-                new_items = [m for m in messages
-                             if generate_message_key(m)
-                             and not is_message_seen(generate_message_key(m))]
+                new_items = []
+                for m in messages:
+                    k = generate_message_key(m)
+                    if k and not is_message_seen(k):
+                        new_items.append(m)
+                        seen_message_ids.add(k)  # Mark seen immediately
 
                 if new_items:
                     logger.info(f"🔔 {len(new_items)} new SMS/OTP(s) detected from OTPMAN 2 (KSI)!")
