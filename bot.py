@@ -322,12 +322,15 @@ class KSIClient:
     async def fetch_incoming_messages(self) -> List[Dict[str, Any]]:
         try:
             client = self._get_http_client()
-            start_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            now = datetime.now(timezone.utc)
+            start_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+            end_date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
             url = f"{self.base_url}/api/v1/iprn/messages"
             msg_type = os.getenv("MESSAGE_TYPE", "").strip().lower()
             params: Dict[str, Any] = {
                 "per_page": 200,
                 "start_date": start_date,
+                "end_date": end_date,
             }
             if msg_type in ["a2p", "p2p"]:
                 params["type"] = msg_type
@@ -355,7 +358,7 @@ class KSIClient:
                 if reset_ts_val and str(reset_ts_val).isdigit():
                     now_epoch = datetime.now(timezone.utc).timestamp()
                     sleep_until_reset = max(float(reset_ts_val) - now_epoch + 1.0, 5.0)
-                    logger.info(f"⏳ Next available polling window in {sleep_until_reset:.1f}s...")
+                    logger.info(f"⏳ Rate limit window active. Resting {sleep_until_reset:.1f}s until reset...")
                     await asyncio.sleep(sleep_until_reset)
 
             if res.is_success:
@@ -748,6 +751,15 @@ async def send_with_retry(bot: Bot, chat_id: int, text: str, max_retries: int = 
             logger.warning(f"Network error sending to {chat_id}: {net_err}. Retry {attempt}/{max_retries}...")
             await asyncio.sleep(3.0)
         except Exception as e:
+            err_str = str(e).lower()
+            if "can't parse entities" in err_str or "parse" in err_str:
+                try:
+                    # Strip HTML and send plain text so message is never dropped
+                    plain = re.sub(r"<[^>]+>", "", text)
+                    await bot.send_message(chat_id=chat_id, text=plain)
+                    return True
+                except Exception:
+                    pass
             logger.error(f"❌ Cannot send to {chat_id}: {e}")
             return False
     return False
