@@ -196,28 +196,64 @@ seen_message_ids: Set[str] = set()
 seen_timestamps: Dict[str, float] = {}
 _gist_dirty: bool = False
 
+GIST_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
 class GistStorage:
-    def __init__(self, gist_id: str, token: str, filename: str = "otpman2_seen_messages.json"):
+    def __init__(self, gist_id: str, token: str, filename: str = "otpman2_seen_messages.json",
+                 description: str = "OTPMAN 2 (KSI) Bot — 28h persistent storage"):
         self.gist_id = gist_id
         self.token = token
         self.filename = filename
-        self.enabled = bool(gist_id and token)
-        self.api_url = f"https://api.github.com/gists/{gist_id}"
+        self.description = description
+        self.enabled = bool(token)
+        self.api_url = f"https://api.github.com/gists/{gist_id}" if gist_id else ""
+
+    def _auth_headers(self) -> Dict[str, str]:
+        return {**GIST_HEADERS, "Authorization": f"Bearer {self.token}"}
+
+    async def ensure_gist(self) -> bool:
+        """Auto-create a secret Gist if GIST_ID is not set."""
+        if self.gist_id:
+            return True
+        if not self.token:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                res = await http.post(
+                    "https://api.github.com/gists",
+                    headers=self._auth_headers(),
+                    json={
+                        "description": self.description,
+                        "public": False,
+                        "files": {
+                            self.filename: {
+                                "content": json.dumps({"seen": {}, "bot": "OTPMAN2_KSI", "count": 0}, indent=2)
+                            }
+                        }
+                    }
+                )
+                if res.is_success:
+                    self.gist_id = res.json().get("id", "")
+                    self.api_url = f"https://api.github.com/gists/{self.gist_id}"
+                    logger.info(f"☁️ Auto-created GitHub Gist: {self.gist_id}")
+                    logger.info(f"   ➜ Add this as a GitHub Secret: GIST_ID = {self.gist_id}")
+                    return True
+                else:
+                    logger.warning(f"Gist auto-create failed {res.status_code}: {res.text[:120]}")
+        except Exception as e:
+            logger.warning(f"Gist auto-create error: {e}")
+        return False
 
     async def load_seen(self) -> Dict[str, float]:
         """Fetch 28h history from GitHub Gist."""
-        if not self.enabled:
+        if not self.enabled or not self.api_url:
             return {}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.get(
-                    self.api_url,
-                    headers={
-                        "Authorization": f"Bearer {self.token}",
-                        "Accept": "application/vnd.github+json",
-                        "X-GitHub-Api-Version": "2022-11-28",
-                    }
-                )
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                res = await http.get(self.api_url, headers=self._auth_headers())
                 if res.is_success:
                     data = res.json()
                     files = data.get("files", {})
@@ -237,13 +273,13 @@ class GistStorage:
 
     async def save_seen(self, seen_dict: Dict[str, float]) -> bool:
         """Prune older than 28h and sync to GitHub Gist."""
-        if not self.enabled:
+        if not self.enabled or not self.api_url:
             return False
         try:
             cutoff = datetime.now(timezone.utc).timestamp() - (28 * 3600)
             cleaned = {k: v for k, v in seen_dict.items() if v >= cutoff}
             payload = {
-                "description": "24/7 OTPMAN 2 (KSI) Bot Persistent Storage (28h retention)",
+                "description": self.description,
                 "files": {
                     self.filename: {
                         "content": json.dumps({
@@ -255,16 +291,8 @@ class GistStorage:
                     }
                 }
             }
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.patch(
-                    self.api_url,
-                    headers={
-                        "Authorization": f"Bearer {self.token}",
-                        "Accept": "application/vnd.github+json",
-                        "X-GitHub-Api-Version": "2022-11-28",
-                    },
-                    json=payload
-                )
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                res = await http.patch(self.api_url, headers=self._auth_headers(), json=payload)
                 if res.is_success:
                     logger.info(f"☁️ Synced {len(cleaned)} messages to GitHub Gist.")
                     return True
@@ -274,7 +302,11 @@ class GistStorage:
             logger.warning(f"Gist sync error: {e}")
         return False
 
-gist_storage = GistStorage(GIST_ID, GIST_TOKEN, filename="otpman2_seen_messages.json")
+gist_storage = GistStorage(
+    GIST_ID, GIST_TOKEN,
+    filename="otpman2_seen_messages.json",
+    description="OTPMAN 2 (KSI) Bot — 28h persistent storage (auto-managed)"
+)
 
 def get_db_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE, timeout=30.0)
@@ -893,8 +925,9 @@ async def poll_incoming_messages(application: Application):
     bot_start_time = datetime.now(timezone.utc).timestamp()
     logger.info(f"🚀 OTPMAN 2 (KSI) polling engine started at epoch {bot_start_time:.0f}.")
 
-    # 1. Preload 28h history from GitHub Gist cloud storage
+    # 1. Ensure Gist exists (auto-creates if GIST_ID not set)
     if gist_storage.enabled:
+        await gist_storage.ensure_gist()
         gist_seen = await gist_storage.load_seen()
         for k, ts in gist_seen.items():
             seen_message_ids.add(k)
@@ -1157,10 +1190,8 @@ def validate_config():
         errors.append("KSI_API_KEY is missing (or OTPMAN2_API_KEY / PANEL_API_KEY)")
     if not TELEGRAM_GROUP_CHAT_ID and not ADMIN_USER_IDS:
         errors.append("Either TELEGRAM_GROUP_CHAT_ID or ADMIN_USER_IDS must be set")
-    if not GIST_ID:
-        errors.append("GIST_ID is missing — required for 28h persistent storage (create a GitHub Gist and add its ID)")
     if not GIST_TOKEN:
-        errors.append("GIST_TOKEN is missing — required for 28h persistent storage (create a GitHub token with 'gist' scope)")
+        errors.append("GIST_TOKEN is missing — required for 28h persistent storage (GitHub token with 'gist' scope)")
     if errors:
         print("\n❌ Configuration errors:")
         for err in errors:
