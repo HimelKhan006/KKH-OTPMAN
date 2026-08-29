@@ -1157,6 +1157,10 @@ def validate_config():
         errors.append("KSI_API_KEY is missing (or OTPMAN2_API_KEY / PANEL_API_KEY)")
     if not TELEGRAM_GROUP_CHAT_ID and not ADMIN_USER_IDS:
         errors.append("Either TELEGRAM_GROUP_CHAT_ID or ADMIN_USER_IDS must be set")
+    if not GIST_ID:
+        errors.append("GIST_ID is missing — required for 28h persistent storage (create a GitHub Gist and add its ID)")
+    if not GIST_TOKEN:
+        errors.append("GIST_TOKEN is missing — required for 28h persistent storage (create a GitHub token with 'gist' scope)")
     if errors:
         print("\n❌ Configuration errors:")
         for err in errors:
