@@ -840,16 +840,16 @@ async def poll_incoming_messages(application: Application):
                         ok = await _deliver_item(application.bot, item, dest_ids)
                         if ok:
                             total_forwarded_count += 1
-                        await asyncio.sleep(0.4)
 
         except (TimedOut, NetworkError) as net_err:
-            logger.warning(f"⚠️ Network hiccup: {net_err}. Retrying in 5s...")
-            await asyncio.sleep(5.0)
+            logger.warning(f"⚠️ Network hiccup: {net_err}. Retrying in 3s...")
+            await asyncio.sleep(3.0)
         except Exception as e:
-            logger.error(f"⚠️ Polling error: {e}. Continuing in 5s...")
-            await asyncio.sleep(5.0)
+            logger.error(f"⚠️ Polling error: {e}. Continuing in 3s...")
+            await asyncio.sleep(3.0)
 
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        # Micro-yield (0.1s) since fetch_incoming_messages already handles exact rate-limit timing
+        await asyncio.sleep(0.1)
 
 # ==========================================
 # 10. Bot Commands & Announcements
