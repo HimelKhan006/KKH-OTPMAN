@@ -65,13 +65,13 @@ jobs:
           echo "✅ History cleaned."
 
       # CRITICAL: Restore the OTP database from cache so already delivered OTPs are remembered
-      - name: Restore OTP Database (Prevent Re-sends)
+      - name: Restore Persistent Database from Cache
         uses: actions/cache/restore@v4
         with:
-          path: otp_database.db
-          key: otpman2-otp-database-persistent
+          path: bot3_database.db
+          key: bot3-database-persistent
           restore-keys: |
-            otpman2-otp-database-
+            bot3-database-
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -94,8 +94,8 @@ jobs:
             echo "Please configure these in Repository Settings -> Secrets and variables -> Actions"
             exit 1
           fi
-          if [ -f "otp_database.db" ]; then
-            echo "✅ Persistent OTP database restored from cache — no duplicate OTPs will be sent."
+          if [ -f "bot3_database.db" ]; then
+            echo "✅ Persistent Bot 3 database restored from cache — no duplicate OTPs will be sent."
           else
             echo "ℹ️ Fresh database initialized."
           fi
@@ -114,7 +114,7 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
           STARTUP_TYPE: ${{ github.event_name }}
-          DB_FILE: ${{ github.workspace }}/otp_database.db
+          DB_FILE: ${{ github.workspace }}/bot3_database.db
         run: |
           echo "🚀 OTPMAN 2 (KSI) starting (trigger: ${{ github.event_name }})..."
           echo "📦 Database path: $DB_FILE"
@@ -143,8 +143,8 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: otp_database.db
-          key: otpman2-otp-database-persistent
+          path: bot3_database.db
+          key: bot3-database-persistent
 
       - name: Self-Trigger Next Run (Zero Downtime Restart)
         if: always()
