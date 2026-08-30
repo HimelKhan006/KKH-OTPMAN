@@ -1051,51 +1051,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg_obj.reply_text(msg, parse_mode=ParseMode.HTML)
 
 async def send_startup_announcement(application: Application):
-    is_auto_restart = (STARTUP_TYPE == "schedule")
-    group_ids = get_target_group_chat_ids()
+    """
+    Sends the startup / restart alert ONLY to the Admin private chat (DM).
+    NEVER sends startup alerts to the Telegram groups, keeping groups 100% clean for OTPs only.
+    """
+    is_restart = (STARTUP_TYPE == "schedule")
+    status_header = "🔄 <b>OTPMAN 2 AUTO-REFRESH COMPLETED</b>" if is_restart else "🚀 <b>OTPMAN 2 ONLINE (Admin Alert)</b>"
 
-    if is_auto_restart:
-        admin_msg = (
-            "🔄 <b>OTPMAN 2 AUTO-REFRESH COMPLETED</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🤖 <i>System cycle refreshed automatically (24/7 keep-alive).</i>\n"
-            "🔔 <i>Live monitoring on all linked groups remains online.</i>\n"
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-        for aid in ADMIN_USER_IDS:
-            if aid:
-                try:
-                    await send_with_retry(application.bot, aid, admin_msg)
-                    logger.info(f"✅ Auto-refresh notice sent to admin private chat {aid}")
-                except Exception as e:
-                    logger.warning(f"Auto-refresh notice failed for admin {aid}: {e}")
-    else:
-        group_msg = (
-            "🚀 <b>OTPMAN 2 ONLINE</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🔔 <i>All incoming verification codes & OTPs will be delivered here in real-time.</i>\n"
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-        for gid in group_ids:
+    admin_msg = (
+        f"{status_header}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Status:</b> <code>Active & Monitoring Live OTPs ✅</code>\n"
+        f"• <b>Platform:</b> <code>KSI IPRN ({KSI_BASE_URL})</code>\n"
+        f"• <b>Storage:</b> <code>28h Memory Active ☁️</code>\n"
+        f"🔔 <i>All incoming OTPs are forwarded directly to your group in real-time.</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
+    for aid in ADMIN_USER_IDS:
+        if aid:
             try:
-                await send_with_retry(application.bot, gid, group_msg)
-                logger.info(f"✅ Manual startup announcement sent to group {gid}")
+                await send_with_retry(application.bot, aid, admin_msg)
+                logger.info(f"✅ Startup/restart alert sent to admin private chat {aid}")
             except Exception as e:
-                logger.warning(f"Startup announcement failed for group {gid}: {e}")
-
-        admin_private_msg = (
-            "🚀 <b>OTPMAN 2 ONLINE (Admin Alert)</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🔔 <i>System is active and monitoring incoming OTPs from KSI IPRN.</i>\n"
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-        for aid in ADMIN_USER_IDS:
-            if aid:
-                try:
-                    await send_with_retry(application.bot, aid, admin_private_msg)
-                    logger.info(f"✅ Startup alert sent to admin private chat {aid}")
-                except Exception as e:
-                    logger.warning(f"Startup alert failed for admin {aid}: {e}")
+                logger.warning(f"Startup alert failed for admin {aid}: {e}")
 
 async def periodic_db_cleanup_loop():
     while True:
