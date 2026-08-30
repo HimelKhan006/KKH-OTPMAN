@@ -1038,7 +1038,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"👑 <b>OTPMAN 2 (Admin Panel)</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"• <b>Platform:</b> <code>KSI IPRN ({KSI_BASE_URL})</code>\n"
+        f"• <b>Platform:</b> <code>KSI IPRN</code>\n"
         f"• <b>Status:</b> <code>Active & Running ✅</code>\n"
         f"• <b>Storage:</b> <code>{gist_status}</code>\n"
         f"• <b>Target Groups:</b> <code>{group_text}</code>\n"
@@ -1065,7 +1065,7 @@ async def send_startup_announcement(application: Application):
         "🚀 <b>OTPMAN 2 ONLINE (Admin Alert)</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "• <b>Status:</b> <code>Active & Monitoring Live OTPs ✅</code>\n"
-        "• <b>Platform:</b> <code>KSI IPRN ({KSI_BASE_URL})</code>\n"
+        "• <b>Platform:</b> <code>KSI IPRN</code>\n"
         "• <b>Storage:</b> <code>28h Memory Active ☁️</code>\n"
         "🔔 <i>All incoming OTPs are forwarded directly to your group in real-time.</i>\n"
         "━━━━━━━━━━━━━━━━━━━━"
