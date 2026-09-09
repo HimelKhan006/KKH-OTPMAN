@@ -196,6 +196,9 @@ GIST_TOKEN = os.getenv("GIST_TOKEN", os.getenv("GH_TOKEN", os.getenv("GITHUB_TOK
 seen_message_ids: Set[str] = set()
 seen_timestamps: Dict[str, float] = {}
 _gist_dirty: bool = False
+_is_handover: bool = os.getenv("IS_HANDOVER", "false").strip().lower() in ("true", "1", "yes")
+_handover_epoch: float = 0.0
+bot_process_start_time: float = time.time()
 
 GIST_HEADERS = {
     "Accept": "application/vnd.github+json",
@@ -233,13 +236,11 @@ class GistStorage:
                             matching_gists.append(g)
 
                     if matching_gists:
-                        # Use the first matching Gist
                         primary = matching_gists[0]
                         self.gist_id = primary.get("id", "")
                         self.api_url = f"https://api.github.com/gists/{self.gist_id}"
                         logger.info(f"☁️ Reusing existing GitHub Gist: {self.gist_id}")
 
-                        # Automatically DELETE any duplicate Gists from previous runs
                         for dup in matching_gists[1:]:
                             dup_id = dup.get("id")
                             if dup_id and dup_id != self.gist_id:
@@ -260,7 +261,7 @@ class GistStorage:
                         "public": False,
                         "files": {
                             self.filename: {
-                                "content": json.dumps({"seen": {}, "bot": self.bot_name, "count": 0}, indent=2)
+                                "content": json.dumps({"seen": {}, "bot": self.bot_name, "count": 0, "handover": False}, indent=2)
                             }
                         }
                     }
@@ -276,8 +277,8 @@ class GistStorage:
             logger.warning(f"Gist auto-management error: {e}")
         return False
 
-    async def load_seen(self) -> Dict[str, float]:
-        """Fetch 28h history from GitHub Gist."""
+    async def load_state(self) -> Dict[str, Any]:
+        """Fetch 28h history and continuous handover state from GitHub Gist."""
         if not self.enabled or not self.api_url:
             return {}
         try:
@@ -289,47 +290,71 @@ class GistStorage:
                     if self.filename in files:
                         content_str = files[self.filename].get("content", "{}")
                         parsed = json.loads(content_str)
-                        seen_map = parsed.get("seen", {}) if isinstance(parsed, dict) else {}
-                        cutoff = datetime.now(timezone.utc).timestamp() - (28 * 3600)
-                        valid = {k: float(v) for k, v in seen_map.items() if float(v) >= cutoff}
-                        logger.info(f"☁️ Restored {len(valid)} seen messages from GitHub Gist ({self.gist_id[:8]}...).")
-                        return valid
+                        if isinstance(parsed, dict):
+                            seen_map = parsed.get("seen", {})
+                            cutoff = datetime.now(timezone.utc).timestamp() - (28 * 3600)
+                            valid_seen = {k: float(v) for k, v in seen_map.items() if float(v) >= cutoff}
+                            logger.info(f"☁️ Restored {len(valid_seen)} seen messages from GitHub Gist ({self.gist_id[:8]}...).")
+                            return {
+                                "seen": valid_seen,
+                                "handover": bool(parsed.get("handover", False)),
+                                "handover_epoch": float(parsed.get("handover_epoch", 0.0)),
+                                "total_forwarded": int(parsed.get("total_forwarded", 0)),
+                                "country_counts": parsed.get("country_counts", {}),
+                            }
                 else:
                     logger.warning(f"Gist load status {res.status_code}: {res.text[:100]}")
         except Exception as e:
             logger.warning(f"Gist load error: {e}")
         return {}
 
-    async def save_seen(self, seen_dict: Dict[str, float]) -> bool:
-        """Prune older than 28h and sync to GitHub Gist."""
+    async def load_seen(self) -> Dict[str, float]:
+        """Backwards compatibility wrapper for load_state."""
+        state = await self.load_state()
+        return state.get("seen", {})
+
+    async def save_state(self, seen_dict: Dict[str, float], is_handover: bool = False,
+                         total_forwarded: int = 0, country_counts: Optional[Dict[str, int]] = None) -> bool:
+        """Prune older than 28h and sync state & handover markers to GitHub Gist."""
         if not self.enabled or not self.api_url:
             return False
         try:
             cutoff = datetime.now(timezone.utc).timestamp() - (28 * 3600)
             cleaned = {k: v for k, v in seen_dict.items() if v >= cutoff}
+            payload_data = {
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "bot": self.bot_name,
+                "count": len(cleaned),
+                "seen": cleaned,
+                "handover": is_handover,
+                "handover_epoch": datetime.now(timezone.utc).timestamp() if is_handover else 0.0,
+                "total_forwarded": total_forwarded,
+                "country_counts": country_counts or {},
+            }
             payload = {
                 "description": self.description,
                 "files": {
                     self.filename: {
-                        "content": json.dumps({
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                            "bot": "OTPMAN2_KSI",
-                            "count": len(cleaned),
-                            "seen": cleaned
-                        }, indent=2)
+                        "content": json.dumps(payload_data, indent=2)
                     }
                 }
             }
             async with httpx.AsyncClient(timeout=15.0) as http:
                 res = await http.patch(self.api_url, headers=self._auth_headers(), json=payload)
                 if res.is_success:
-                    logger.info(f"☁️ Synced {len(cleaned)} messages to GitHub Gist.")
+                    logger.info(f"☁️ Synced {len(cleaned)} messages to GitHub Gist (handover={is_handover}).")
                     return True
                 else:
                     logger.warning(f"Gist sync status {res.status_code}: {res.text[:100]}")
         except Exception as e:
             logger.warning(f"Gist sync error: {e}")
         return False
+
+    async def save_seen(self, seen_dict: Dict[str, float]) -> bool:
+        """Backwards compatibility wrapper for save_state."""
+        global total_forwarded_count, country_forwarded_counts
+        return await self.save_state(seen_dict, is_handover=False, total_forwarded=total_forwarded_count,
+                                     country_counts=country_forwarded_counts)
 
 gist_storage = GistStorage(
     GIST_ID, GIST_TOKEN,
@@ -949,18 +974,36 @@ async def _deliver_item(bot: Bot, item: Dict[str, Any], dest_ids: Set[int]) -> b
     return sent_to_any
 
 async def poll_incoming_messages(application: Application):
-    global total_forwarded_count, _gist_dirty
+    global total_forwarded_count, _gist_dirty, _is_handover, _handover_epoch
     init_db()
     bot_start_time = datetime.now(timezone.utc).timestamp()
     logger.info(f"🚀 OTPMAN 2 (KSI) polling engine started at epoch {bot_start_time:.0f}.")
 
-    # 1. Ensure Gist exists (auto-creates if GIST_ID not set)
+    # 1. Ensure Gist exists and restore state
     if gist_storage.enabled:
         await gist_storage.ensure_gist()
-        gist_seen = await gist_storage.load_seen()
+        gist_state = await gist_storage.load_state()
+        gist_seen = gist_state.get("seen", {})
         for k, ts in gist_seen.items():
             seen_message_ids.add(k)
             seen_timestamps[k] = ts
+
+        # Check if previous session performed a clean zero-restart handover
+        if gist_state.get("handover"):
+            _is_handover = True
+            _handover_epoch = float(gist_state.get("handover_epoch") or 0.0)
+            saved_total = int(gist_state.get("total_forwarded") or 0)
+            if saved_total > total_forwarded_count:
+                total_forwarded_count = saved_total
+            saved_countries = gist_state.get("country_counts", {})
+            if isinstance(saved_countries, dict):
+                for c_iso, c_cnt in saved_countries.items():
+                    country_forwarded_counts[c_iso] = max(country_forwarded_counts.get(c_iso, 0), int(c_cnt))
+            logger.info(
+                f"🔄 Zero-Restart Handover Active: {len(gist_seen)} messages restored, "
+                f"{total_forwarded_count} forwarded previously, last epoch {_handover_epoch:.0f}."
+            )
+
         # Populate local SQLite DB from cloud memory so database is never empty on restarts
         try:
             with get_db_connection() as conn:
@@ -983,14 +1026,36 @@ async def poll_incoming_messages(application: Application):
     except Exception as e:
         logger.warning(f"Preload error: {e}")
 
-    # 3. Startup pass: baseline history, mark ALL existing messages as seen (NEVER forward old history)
+    # 3. Startup pass: baseline history or catch handover transition gap OTPs
     try:
         initial_msgs = await client.fetch_incoming_messages()
-        baselined    = 0
-        for item in initial_msgs:
+        dest_ids = _get_otp_dest_ids()
+        baselined = 0
+        forwarded_handover_gap = 0
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        for item in reversed(initial_msgs):
             mid = generate_message_key(item)
             if not mid:
                 continue
+            if is_message_seen(mid):
+                continue
+
+            # In handover mode: deliver any OTPs that arrived during runner transition gap
+            if _is_handover and _handover_epoch > 0:
+                msg_ts = parse_message_timestamp(str(item.get("received_at") or item.get("createdAt") or item.get("messageTime") or ""))
+                if ((msg_ts > 0 and msg_ts >= (_handover_epoch - 60.0)) or (now_ts - msg_ts < 300.0 and msg_ts > 0)):
+                    if dest_ids:
+                        ok = await _deliver_item(application.bot, item, dest_ids)
+                        if ok:
+                            total_forwarded_count += 1
+                            forwarded_handover_gap += 1
+                            seen_message_ids.add(mid)
+                            seen_timestamps[mid] = now_ts
+                            _gist_dirty = True
+                            continue
+
+            # Otherwise, baseline historical message without forwarding
             seen_message_ids.add(mid)
             seen_timestamps[mid] = bot_start_time
             raw_num = str(item.get("number") or item.get("destinationNumber") or "")
@@ -1001,9 +1066,17 @@ async def poll_incoming_messages(application: Application):
             iso     = get_country_iso_display(item)
             save_processed_message(item, gid or 0, iso, num, otp)
             baselined += 1
+
+        if forwarded_handover_gap > 0:
+            logger.info(f"⚡ Zero-Downtime Handover: Delivered {forwarded_handover_gap} OTP(s) received during runner switch gap!")
         if baselined > 0 and gist_storage.enabled:
-            await gist_storage.save_seen(seen_timestamps)
-        logger.info(f"✅ Startup: {baselined} historical messages baselined (0 old messages forwarded).")
+            await gist_storage.save_state(
+                seen_dict=seen_timestamps,
+                is_handover=False,
+                total_forwarded=total_forwarded_count,
+                country_counts=country_forwarded_counts
+            )
+        logger.info(f"✅ Startup pass complete: {baselined} historical messages baselined (0 old messages forwarded).")
     except Exception as e:
         logger.warning(f"Startup pass error: {e}")
 
@@ -1035,6 +1108,7 @@ async def poll_incoming_messages(application: Application):
                         ok = await _deliver_item(application.bot, item, dest_ids)
                         if ok:
                             total_forwarded_count += 1
+                            _gist_dirty = True
 
         except (TimedOut, NetworkError) as net_err:
             logger.warning(f"⚠️ Network hiccup: {net_err}. Retrying in 3s...")
@@ -1122,7 +1196,12 @@ async def periodic_gist_sync_loop():
         await asyncio.sleep(30.0)
         if _gist_dirty and gist_storage.enabled:
             _gist_dirty = False
-            await gist_storage.save_seen(seen_timestamps)
+            await gist_storage.save_state(
+                seen_dict=seen_timestamps,
+                is_handover=False,
+                total_forwarded=total_forwarded_count,
+                country_counts=country_forwarded_counts
+            )
 
 # ==========================================
 # 11. Diagnostics (--test mode)
@@ -1286,18 +1365,36 @@ async def main():
                 logger.warning(f"Telegram polling warning on attempt {attempt}: {poll_err}")
                 await asyncio.sleep(3.0)
 
-        # Resilient keepalive loop with optional scheduled session handover
+        # Resilient keepalive loop with scheduled zero-restart session handover
         start_time = time.time()
         session_timeout = int(os.getenv("SESSION_TIMEOUT", "0"))
         if session_timeout > 0:
-            logger.info(f"⏱️ Session handover timer armed: {session_timeout}s ({session_timeout/3600:.2f}h)")
+            logger.info(f"⏱️ Zero-restart handover timer armed: {session_timeout}s ({session_timeout/3600:.2f}h)")
 
         while True:
             try:
-                if session_timeout > 0 and (time.time() - start_time) >= session_timeout:
-                    logger.info(f"⏱️ Session timeout reached ({session_timeout}s). Initiating clean shutdown for handover...")
+                now = time.time()
+                elapsed = now - start_time
+                # 60s before session timeout: initiate pre-handover state snapshot & sync
+                if session_timeout > 0 and elapsed >= (session_timeout - 60):
+                    logger.info(f"⏱️ Session limit approaching ({elapsed:.0f}s elapsed of {session_timeout}s).")
+                    logger.info("🔄 Pre-timeout analysis: saving workflow state to Gist & SQLite for seamless handover...")
+                    try:
+                        with get_db_connection() as conn:
+                            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    except Exception as e:
+                        logger.warning(f"DB checkpoint notice: {e}")
+
+                    if gist_storage.enabled:
+                        await gist_storage.save_state(
+                            seen_dict=seen_timestamps,
+                            is_handover=True,
+                            total_forwarded=total_forwarded_count,
+                            country_counts=country_forwarded_counts
+                        )
+                    logger.info("✅ Pre-handover state saved. Exiting cleanly for next runner switch (exit 0)...")
                     break
-                sleep_chunk = min(30, session_timeout) if session_timeout > 0 else 3600
+                sleep_chunk = min(15, session_timeout) if session_timeout > 0 else 3600
                 await asyncio.sleep(sleep_chunk)
             except asyncio.CancelledError:
                 break
@@ -1313,8 +1410,19 @@ async def main():
             await application.shutdown()
         except Exception:
             pass
-        if _gist_dirty and gist_storage.enabled:
-            await gist_storage.save_seen(seen_timestamps)
+        try:
+            with get_db_connection() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+        if gist_storage.enabled:
+            near_timeout = session_timeout > 0 and (time.time() - start_time) >= (session_timeout - 120)
+            await gist_storage.save_state(
+                seen_dict=seen_timestamps,
+                is_handover=near_timeout or _is_handover,
+                total_forwarded=total_forwarded_count,
+                country_counts=country_forwarded_counts
+            )
 
 if __name__ == "__main__":
     try:
