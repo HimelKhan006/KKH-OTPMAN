@@ -1137,27 +1137,48 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_count  = get_total_processed_count()
     group_text = f"{len(group_ids)} Linked Groups ✅" if len(group_ids) > 1 else ("Linked ✅" if group_ids else "Not Linked ⚠️")
 
+    # Uptime calculation
+    uptime_secs = int(time.time() - bot_process_start_time)
+    hours, rem = divmod(uptime_secs, 3600)
+    mins, secs = divmod(rem, 60)
+    uptime_str = f"{hours}h {mins}m {secs}s" if hours else f"{mins}m {secs}s"
+
+    # Handover countdown
+    session_timeout = int(os.getenv("SESSION_TIMEOUT", "0"))
+    if session_timeout > 0:
+        handover_secs = max(0, session_timeout - uptime_secs)
+        h_hours, h_rem = divmod(handover_secs, 3600)
+        h_mins, _ = divmod(h_rem, 60)
+        handover_info = f"<code>{h_hours}h {h_mins}m remaining</code> (Auto-Sync 🔄)"
+    else:
+        handover_info = "<code>Always-Online (Continuous)</code>"
+
+    # Build per-country breakdown (sorted by count desc)
     country_lines = ""
     if country_forwarded_counts:
         sorted_countries = sorted(country_forwarded_counts.items(), key=lambda x: x[1], reverse=True)
-        country_lines = "\n🌍 <b>OTPs by Country (this session):</b>\n"
+        country_lines = "\n🌍 <b>OTPs by Country (Cumulative):</b>\n"
         for idx, (iso_display, cnt) in enumerate(sorted_countries[:15], 1):
             country_lines += f"  {idx}. {iso_display} — <code>{cnt}</code>\n"
         country_lines += "━━━━━━━━━━━━━━━━━━━━\n"
 
-    gist_status = f"Connected ({GIST_ID[:8]}...) ☁️" if gist_storage.enabled else "Local Storage"
+    gist_status = f"28h Persistent Memory ({GIST_ID[:8]}...) ☁️" if gist_storage.enabled else "Local Storage"
     msg = (
-        f"👑 <b>OTPMAN 2 (Admin Panel)</b>\n"
+        f"⚡ <b>OTPMAN 2 24/7 (Zero-Restart Engine)</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>Engine Status:</b> <code>100% Online & Forwarding ✅</code>\n"
+        f"• <b>Handover Mode:</b> <code>Zero-Restart Handover Active 🔄</code>\n"
+        f"• <b>Session Uptime:</b> <code>{uptime_str}</code>\n"
+        f"• <b>Next Handover:</b> {handover_info}\n"
         f"• <b>Platform:</b> <code>KSI IPRN</code>\n"
-        f"• <b>Status:</b> <code>Active & Running ✅</code>\n"
         f"• <b>Storage:</b> <code>{gist_status}</code>\n"
         f"• <b>Target Groups:</b> <code>{group_text}</code>\n"
-        f"• <b>OTPs Forwarded:</b> <code>{total_forwarded_count} (this session)</code>\n"
+        f"• <b>OTPs Forwarded:</b> <code>{total_forwarded_count}</code> <i>(accumulated)</i>\n"
         f"• <b>Database:</b> <code>{db_count} total OTPs stored</code>\n"
+        f"• <b>Poll Interval:</b> <code>{POLL_INTERVAL_SECONDS}s</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{country_lines}"
-        f"🔔 Real-time dual-group monitoring active."
+        f"🔔 <i>Real-time seamless forwarding active. Zero restart alerts.</i>"
     )
     await msg_obj.reply_text(msg, parse_mode=ParseMode.HTML)
 
@@ -1312,6 +1333,7 @@ async def main():
         .build()
     )
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("status", start_command))
 
     def start_health_server():
         port_str = os.getenv("PORT")
@@ -1349,7 +1371,10 @@ async def main():
         asyncio.create_task(periodic_db_cleanup_loop())
         asyncio.create_task(periodic_gist_sync_loop())
         try:
-            await application.bot.set_my_commands([("start", "📊 Bot status & admin panel")])
+            await application.bot.set_my_commands([
+                ("start",  "📊 Bot status & admin dashboard"),
+                ("status", "⚡ Live zero-restart engine status"),
+            ])
         except Exception:
             pass
         logger.info("✅ OTPMAN 2 is fully online and monitoring incoming messages...")
