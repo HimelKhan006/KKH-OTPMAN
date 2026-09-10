@@ -52,7 +52,7 @@ from typing import Set, Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, CopyTextButton, MessageEntity
 from telegram.constants import ParseMode
 from telegram.error import RetryAfter, TimedOut, NetworkError, Conflict
 from telegram.request import HTTPXRequest
@@ -896,6 +896,160 @@ SERVICE_ICONS: Dict[str, Tuple[str, str]] = {
 }
 DEFAULT_ICON_URL = "https://img.icons8.com/color/512/sms.png"
 
+CUSTOM_EMOJI_FALLBACKS: Dict[str, str] = {
+    "whatsapp": "\U0001f7e2",
+    "telegram": "\u2708\ufe0f",
+    "google":   "\U0001f50d",
+    "gmail":    "\u2709\ufe0f",
+    "facebook": "\U0001f535",
+    "fb":       "\U0001f535",
+    "instagram":"\U0001f4f8",
+    "insta":    "\U0001f4f8",
+    "tiktok":   "\U0001f3b5",
+    "twitter":  "\u2716\ufe0f",
+    "x":        "\u2716\ufe0f",
+    "discord":  "\U0001f47e",
+    "apple":    "\U0001f34e",
+    "icloud":   "\U0001f34e",
+    "microsoft":"\U0001fa9f",
+    "outlook":  "\U0001f4e7",
+    "amazon":   "\U0001f4e6",
+    "netflix":  "\U0001f3ac",
+    "uber":     "\U0001f697",
+    "snapchat": "\U0001f47b",
+    "viber":    "\U0001f7e3",
+    "paypal":   "\U0001f4b3",
+    "wechat":   "\U0001f7e2",
+    "line":     "\U0001f7e2",
+    "imo":      "\U0001f7e1",
+    "steam":    "\U0001f3ae",
+    "yahoo":    "\U0001f7e3",
+    "linkedin": "\U0001f4bc",
+    "binance":  "\U0001fa99",
+}
+
+def get_service_icon_url(source: str) -> str:
+    """Returns real app logo URL for the given service/source string."""
+    low = (source or "").lower()
+    for key, (_, url) in SERVICE_ICONS.items():
+        if key in low:
+            return url
+    return DEFAULT_ICON_URL
+
+def is_admin(user_id: int) -> bool:
+    if not ADMIN_USER_IDS:
+        return True
+    return user_id in ADMIN_USER_IDS
+
+def get_service_display(source: str) -> str:
+    """Returns custom emoji tag (if set) or fallback emoji for the service."""
+    s = (source or "").strip()
+    if not s:
+        return "\U0001f4f1"
+    low = s.lower()
+    data = load_stored_data()
+    custom_emojis = data.get("custom_emojis", {})
+    for key, eid in custom_emojis.items():
+        if key.lower() in low and eid:
+            fallback = CUSTOM_EMOJI_FALLBACKS.get(key.lower(), "\U0001f7e2")
+            return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'
+    for key, fallback in CUSTOM_EMOJI_FALLBACKS.items():
+        if key in low:
+            return fallback
+    return "\U0001f4f1"
+
+async def cmd_set_icon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to set a real app custom emoji for a service."""
+    user = update.effective_user
+    if not is_admin(user.id if user else 0):
+        await update.message.reply_text("\u274c Unauthorized.")
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "\u2139\ufe0f <b>Usage:</b> <code>/set_icon &lt;service&gt; &lt;emoji&gt;</code>\n"
+            "Example: <code>/set_icon whatsapp \U0001f7e2</code> (send with real custom emoji)\n"
+            "Or reply to any message containing a custom emoji with <code>/set_icon whatsapp</code>",
+            parse_mode="HTML",
+        )
+        return
+    service = args[0].strip().lower()
+    emoji_id = None
+    if len(args) > 1 and args[1].isdigit():
+        emoji_id = args[1].strip()
+    msg = update.message
+    if not emoji_id and msg:
+        for ent in (msg.entities or ()):
+            if ent.type in ("custom_emoji", MessageEntity.CUSTOM_EMOJI):
+                emoji_id = str(ent.custom_emoji_id)
+                break
+    if not emoji_id and msg and msg.reply_to_message:
+        for ent in (msg.reply_to_message.entities or ()) + (msg.reply_to_message.caption_entities or ()):
+            if ent.type in ("custom_emoji", MessageEntity.CUSTOM_EMOJI):
+                emoji_id = str(ent.custom_emoji_id)
+                break
+    if not emoji_id:
+        await update.message.reply_text(
+            f"\u26a0\ufe0f No Telegram Custom Emoji detected for '<b>{service}</b>'.\n"
+            "Send: <code>/set_icon whatsapp &lt;custom_emoji&gt;</code>\n"
+            "Or numeric ID: <code>/set_icon whatsapp &lt;id&gt;</code>",
+            parse_mode="HTML",
+        )
+        return
+    data = load_stored_data()
+    if "custom_emojis" not in data or not isinstance(data["custom_emojis"], dict):
+        data["custom_emojis"] = {}
+    data["custom_emojis"][service] = emoji_id
+    save_stored_data(data)
+    preview = f'<tg-emoji emoji-id="{emoji_id}">\U0001f7e2</tg-emoji>'
+    await update.message.reply_text(
+        f"\u2705 <b>Real app icon saved for {service.capitalize()}!</b>\n"
+        f"Preview: {preview}\nEmoji ID: <code>{emoji_id}</code>",
+        parse_mode="HTML",
+    )
+
+async def cmd_list_icons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all configured custom emoji icons."""
+    user = update.effective_user
+    if not is_admin(user.id if user else 0):
+        await update.message.reply_text("\u274c Unauthorized.")
+        return
+    data = load_stored_data()
+    custom_emojis = data.get("custom_emojis", {})
+    if not custom_emojis:
+        await update.message.reply_text(
+            "\u2139\ufe0f No custom emoji icons configured yet.\n"
+            "Use <code>/set_icon &lt;service&gt; &lt;emoji&gt;</code> to set one.",
+            parse_mode="HTML",
+        )
+        return
+    lines = ["\U0001f3a8 <b>Configured Real App Icons:</b>\n\u2501" * 10]
+    for svc, eid in custom_emojis.items():
+        preview = f'<tg-emoji emoji-id="{eid}">\U0001f7e2</tg-emoji>'
+        lines.append(f"\u2022 {preview} <b>{svc.capitalize()}:</b> <code>{eid}</code>")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+async def cmd_remove_icon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove a custom icon for a service."""
+    user = update.effective_user
+    if not is_admin(user.id if user else 0):
+        await update.message.reply_text("\u274c Unauthorized.")
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("\u2139\ufe0f <b>Usage:</b> <code>/remove_icon &lt;service&gt;</code>", parse_mode="HTML")
+        return
+    service = args[0].strip().lower()
+    data = load_stored_data()
+    custom_emojis = data.get("custom_emojis", {})
+    if service in custom_emojis:
+        del custom_emojis[service]
+        data["custom_emojis"] = custom_emojis
+        save_stored_data(data)
+        await update.message.reply_text(f"\u2705 Removed icon for <b>{service}</b>.", parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"\u26a0\ufe0f No icon found for <b>{service}</b>.", parse_mode="HTML")
+
 def get_service_info(source: str) -> Tuple[str, str]:
     """Returns (clean_service_name, icon_url) for the given sender/service string."""
     s = (source or "").strip()
@@ -908,26 +1062,31 @@ def get_service_info(source: str) -> Tuple[str, str]:
     return html.escape(s), DEFAULT_ICON_URL
 
 def format_otp_notification(item: Dict[str, Any]) -> tuple:
-    """Returns (text, otp_code, icon_url) for the OTP message."""
-    raw_source             = str(item.get("source") or item.get("sender") or item.get("caller") or "").strip()
-    service_name, icon_url = get_service_info(raw_source)
-    raw_number             = str(item.get("number") or item.get("destinationNumber") or "")
-    masked_number          = html.escape(mask_phone_number(raw_number)) if raw_number else ""
-    raw_message            = str(item.get("message") or item.get("text") or item.get("body") or "")
-    otp_code               = extract_otp_code(raw_message)
+    """Returns (text, otp_code, icon_url) formatted as: ET • 🟢 WhatsApp • number • language"""
+    raw_source    = str(item.get("source") or item.get("sender") or item.get("caller") or "").strip()
+    raw_number    = str(item.get("number") or item.get("destinationNumber") or "")
+    masked_number = html.escape(mask_phone_number(raw_number)) if raw_number else ""
+    raw_message   = str(item.get("message") or item.get("text") or item.get("body") or "")
+    otp_code      = extract_otp_code(raw_message)
 
+    country_code  = get_country_code(item)
+    service_disp  = get_service_display(raw_source)
+    icon_url      = get_service_icon_url(raw_source)
+    language_disp = detect_language(raw_message, item)
+
+    parts = []
+    if country_code:
+        parts.append(f"<b>{country_code}</b>")
+    if service_disp:
+        parts.append(service_disp)
     if masked_number:
-        num_line = f"📱 <b>Number:</b> <code>{masked_number}</code> | <b>{service_name}</b>"
-    else:
-        num_line = f"📱 <b>Service:</b> <b>{service_name}</b>"
+        parts.append(f"<b>{masked_number}</b>")
+    if language_disp:
+        parts.append(language_disp)
 
-    text = (
-        f"⚡ <b>NEW OTP / SMS RECEIVED</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{num_line}"
-    )
+    text = " • ".join(parts) if parts else "⚡ <b>NEW OTP</b>"
     if not otp_code and raw_message:
-        text += f"\n💬 <b>SMS:</b> <code>{html.escape(raw_message[:150])}</code>"
+        text += f"\n💬 <code>{html.escape(raw_message[:150])}</code>"
 
     return text, otp_code, icon_url
 
@@ -1411,6 +1570,9 @@ async def main():
     )
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("status", start_command))
+    application.add_handler(CommandHandler("set_icon", cmd_set_icon))
+    application.add_handler(CommandHandler("list_icons", cmd_list_icons))
+    application.add_handler(CommandHandler("remove_icon", cmd_remove_icon))
 
     def start_health_server():
         port_str = os.getenv("PORT")
