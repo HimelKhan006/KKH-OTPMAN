@@ -1184,26 +1184,41 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_startup_announcement(application: Application):
     """
-    Sends restart notification to Admin private DM only on every restart.
+    Zero-Restart Handover Engine — Silent startup announcements.
+    Only notifies admin on genuine code push deployments.
+    Routine GitHub Actions session handovers (every 5h 25m) are COMPLETELY SILENT.
     NEVER sends any message to Telegram groups.
     """
+    global _is_handover
+    # Suppress ALL output on automated session handovers
+    silent_env = os.getenv("SILENT_STARTUP", "").strip().lower() in ("true", "1", "yes")
+    if _is_handover or silent_env:
+        logger.info("🤫 Zero-restart session handover continuation — restart notification suppressed (silent mode).")
+        return
+
+    # Also suppress if ADMIN_STARTUP_ALERT is not explicitly enabled AND it's not a fresh push deployment
+    admin_alert_enabled = os.getenv("ADMIN_STARTUP_ALERT", "false").strip().lower() in ("true", "1", "yes")
+    if not admin_alert_enabled and STARTUP_TYPE != "push":
+        logger.info("ℹ️ OTPMAN 2 running in silent 24/7 background mode (zero-restart, no admin spam).")
+        return
+
     admin_msg = (
-        "🔄 <b>OTPMAN 2 RESTARTED (Admin Alert)</b>\n"
+        "⚡ <b>OTPMAN 2 24/7 ONLINE</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "• <b>Status:</b> <code>Active & Monitoring Live OTPs ✅</code>\n"
-        "• <b>Cycle:</b> <code>24-Hour Scheduled Cycle Active ⏱️</code>\n"
+        "• <b>Engine:</b> <code>Zero-Restart Handover Engine 🔄</code>\n"
         "• <b>Platform:</b> <code>KSI IPRN</code>\n"
         "• <b>Storage:</b> <code>28h Memory Active ☁️</code>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "👑 <i>Restart notification dispatched to Admin private DM only.</i>"
+        "👑 <i>Send /start or /status anytime to view live status.</i>"
     )
     for aid in ADMIN_USER_IDS:
         if aid:
             try:
                 await send_with_retry(application.bot, aid, admin_msg)
-                logger.info(f"✅ Restart alert sent to admin private chat {aid}")
+                logger.info(f"✅ Initial deployment alert sent to admin {aid}")
             except Exception as e:
-                logger.warning(f"Restart alert failed for admin {aid}: {e}")
+                logger.warning(f"Startup alert failed for admin {aid}: {e}")
 
 async def periodic_db_cleanup_loop():
     while True:
