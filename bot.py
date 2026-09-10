@@ -1120,6 +1120,20 @@ def get_service_info(source: str) -> Tuple[str, str]:
             return name, url
     return html.escape(s), DEFAULT_ICON_URL
 
+def get_country_code(item: Dict[str, Any]) -> str:
+    """Returns 2-letter uppercase ISO country code (e.g. 'ET', 'UG', 'US')."""
+    for field in ["countryCode", "iso", "iso2", "country"]:
+        val = str(item.get(field) or "").strip().upper()
+        if len(val) == 2 and val.isalpha():
+            return val
+    display = get_country_iso_display(item)
+    parts = display.strip().split()
+    if len(parts) >= 2 and len(parts[1]) == 2 and parts[1].isalpha():
+        return parts[1].upper()
+    elif len(parts) == 1 and len(parts[0]) == 2 and parts[0].isalpha():
+        return parts[0].upper()
+    return "GLOBAL"
+
 def format_otp_notification(item: Dict[str, Any]) -> tuple:
     """Returns (text, otp_code, icon_url) formatted as: ET • 🟢 WhatsApp • number • language"""
     raw_source    = str(item.get("source") or item.get("sender") or item.get("caller") or "").strip()
