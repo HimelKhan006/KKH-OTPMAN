@@ -1109,6 +1109,8 @@ async def poll_incoming_messages(application: Application):
                         if ok:
                             total_forwarded_count += 1
                             _gist_dirty = True
+                        # Small delay so each OTP is sent as a clearly separate new message
+                        await asyncio.sleep(1.0)
 
         except (TimedOut, NetworkError) as net_err:
             logger.warning(f"⚠️ Network hiccup: {net_err}. Retrying in 3s...")
