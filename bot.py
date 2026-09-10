@@ -866,10 +866,7 @@ def parse_message_timestamp(time_str: str) -> float:
         return 0.0
 
 def format_otp_notification(item: Dict[str, Any]) -> tuple:
-    """Returns (text, otp_code, raw_message) formatted as:
-    [Flag] [Masked Number] • [ISO]
-    Service: [Service Name]
-    """
+    """Returns (text, otp_code, raw_message) with professional header/divider layout."""
     source        = html.escape(str(item.get("source") or item.get("sender") or item.get("caller") or "SMS Service").strip())
     raw_number    = str(item.get("number") or item.get("destinationNumber") or "")
     masked_number = html.escape(mask_phone_number(raw_number)) if raw_number else ""
@@ -881,16 +878,27 @@ def format_otp_notification(item: Dict[str, Any]) -> tuple:
     flag = parts[0] if parts else "🌐"
     iso  = parts[1] if len(parts) > 1 else "XX"
 
-    lines = []
-    if masked_number:
-        lines.append(f"{flag} <code>{masked_number}</code> • <b>{iso}</b>")
-    else:
-        lines.append(f"{flag} <b>{iso}</b>")
+    DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+    INDENT  = "          "
 
-    lines.append(f"📡 <b>Service:</b> <code>{source}</code>")
+    if otp_code:
+        header = "⚡ <b>NEW OTP SMS RECEIVED</b> ⚡"
+    else:
+        header = "⚡ <b>NEW SMS RECEIVED</b> ⚡"
+
+    lines = [header, DIVIDER]
+
+    if masked_number:
+        lines.append(f"{INDENT}{flag} <code>{masked_number}</code> • <b>{iso}</b>")
+    else:
+        lines.append(f"{INDENT}{flag} <b>{iso}</b>")
+
+    lines.append(f"{INDENT}<b>Service:</b> <code>{source}</code>")
 
     if not otp_code and raw_message:
-        lines.append(f"💬 <code>{html.escape(raw_message[:150])}</code>")
+        lines.append(f"{INDENT}<i>{html.escape(raw_message[:200])}</i>")
+
+    lines.append(DIVIDER)
 
     return "\n".join(lines), otp_code, raw_message
 
@@ -952,13 +960,13 @@ async def _deliver_item(bot: Bot, item: Dict[str, Any], dest_ids: Set[int]) -> b
     formatted_text, otp, raw_msg = format_otp_notification(item)
     sent_to_any                  = False
 
-    # Build inline button: OTP copy if code found, else full SMS copy
+    # Build inline button: OTP → just the code; no OTP → "Copy SMS"
     markup = None
     try:
         if otp:
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"📋 Copy Code: {otp}", copy_text=CopyTextButton(text=otp))]])
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton(otp, copy_text=CopyTextButton(text=otp))]])
         elif raw_msg:
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Copy Full SMS", copy_text=CopyTextButton(text=raw_msg))]])
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("Copy SMS", copy_text=CopyTextButton(text=raw_msg))]])
     except Exception:
         markup = None
 
