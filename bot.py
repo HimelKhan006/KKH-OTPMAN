@@ -2910,6 +2910,13 @@ def validate_config():
     errors = []
     if not TELEGRAM_BOT_TOKEN:
         errors.append("TELEGRAM_BOT_TOKEN is missing")
+    else:
+        try:
+            r = httpx.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe", timeout=6.0)
+            if r.status_code == 401 or not r.json().get("ok"):
+                errors.append("TELEGRAM_BOT_TOKEN was REJECTED by Telegram (401 Unauthorized). The token was deleted, revoked, or regenerated in @BotFather. Please get your active token from @BotFather and update GitHub Secrets & .env.")
+        except Exception:
+            pass
     if not KSI_API_KEY:
         errors.append("KSI_API_KEY is missing (or OTPMAN2_API_KEY / PANEL_API_KEY)")
     if not TELEGRAM_GROUP_CHAT_ID and not ADMIN_USER_IDS:
